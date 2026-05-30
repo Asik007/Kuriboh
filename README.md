@@ -30,7 +30,7 @@ Arduino IDE (or compatible build environment) with ESP8266 core and libraries us
 
 ## Configuration
 
-Edit `/tmp/workspace/Asik007/Kuriboh/secrets.h` with your Wi-Fi credentials:
+Edit `secrets.h` with your Wi-Fi credentials:
 
 ```cpp
 const char* WIFI_SSID = "YOUR NETWORK SSID";
@@ -39,7 +39,7 @@ const char* WIFI_PASSWORD = "YOUR NETWORK PASSWORD";
 
 ## Flashing and Running
 
-1. Open `/tmp/workspace/Asik007/Kuriboh/test.ino` in Arduino IDE.
+1. Open `test.ino` in Arduino IDE.
 2. Select your ESP8266 board and correct serial port.
 3. Compile and upload.
 4. Open Serial Monitor at `115200` baud.

@@ -4,14 +4,12 @@
 #include <ESP8266WebServer.h>
 #include "secrets.h"   // <-- Your Wi-Fi credentials
 
-#define OUTPUT_PIN D4
-#define INPUT_PIN D3
+#define OUTPUT_PIN D2
+#define INPUT_PIN D1
 
 ESP8266WiFiMulti wifiMulti;
 ESP8266WebServer server(80);
 
-// const byte OUTPUT_PIN = D2;
-// const byte INPUT_PIN = D1;
 const byte PULSE_BUFFER_SIZE = 100;
 
 volatile unsigned long timeLowTransition = 0;
@@ -19,23 +17,21 @@ volatile byte bufferReadPosition = 0;
 volatile byte bufferWritePosition = 0;
 volatile byte pulseBuffer[PULSE_BUFFER_SIZE];
 
-// For accumulating the received message to display on the web page
 String lastReceivedMessage = "";
 bool newMessageAvailable = false;
 bool bufferOverflowDetected = false;
 
 void setup()
 {
-  Serial.begin(115200);         // <-- Serial for debugging
+  Serial.begin(115200);
   Serial.println("\nSony S-Link Web Controller starting...");
 
   ArduinoOTA.begin();
 
   WiFi.hostname("sony_slink");
   WiFi.mode(WIFI_STA);
-  wifiMulti.addAP(WIFI_SSID, WIFI_PASSWORD);   // <-- From secrets.h
+  wifiMulti.addAP(WIFI_SSID, WIFI_PASSWORD);
 
-  // Wait for WiFi connection
   Serial.print("Connecting to WiFi");
   while (wifiMulti.run() != WL_CONNECTED) {
     delay(100);
@@ -45,7 +41,6 @@ void setup()
   Serial.print("Connected! IP address: ");
   Serial.println(WiFi.localIP());
 
-  // Setup web server routes
   server.on("/", handleRoot);
   server.on("/send", handleSendCommand);
   server.on("/message", handleGetMessage);
@@ -58,26 +53,37 @@ void setup()
   attachInterrupt(digitalPinToInterrupt(INPUT_PIN), busChange, CHANGE);
 }
 
-// --- Web Page Generation (unchanged) ---
+// ---------------------------------------------------------------------------
+// Web page
+// ---------------------------------------------------------------------------
 void handleRoot() {
   String html = "<!DOCTYPE html><html><head><title>S-Link Amplifier Control</title>";
   html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
   html += "<style>";
   html += "body { font-family: sans-serif; margin: 20px; }";
-  html += "button { padding: 15px; margin: 5px; font-size: 1em; min-width: 80px; }";
+  html += "button { padding: 15px; margin: 5px; font-size: 1em; min-width: 80px; cursor: pointer; }";
   html += ".command-group { margin-bottom: 15px; }";
   html += "h3 { margin-bottom: 5px; }";
-  html += "#responseBox { background: #f4f4f4; border: 1px solid #ccc; padding: 10px; margin-top: 20px; min-height: 50px; font-family: monospace; }";
-  html += "</style></head><body>";
-  // html += "<h1>Sony S-Link Amplifier Control</h1>";
+  html += "#responseBox { background: #f4f4f4; border: 1px solid #ccc; padding: 10px; margin-top: 10px; min-height: 40px; font-family: monospace; }";
 
-  // Power Commands
+  // Log styles
+  html += "#logContainer { margin-top: 20px; }";
+  html += "#logHeader { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }";
+  html += "#logBox { background: #f4f4f4; border: 1px solid #ccc; padding: 8px 10px; height: 200px; overflow-y: auto; font-family: monospace; font-size: 13px; }";
+  html += ".log-entry { margin: 2px 0; line-height: 1.5; }";
+  html += ".log-time { color: #888; font-size: 11px; margin-right: 6px; }";
+  html += ".log-cmd   { color: #0055cc; }";
+  html += ".log-reply { color: #007700; }";
+  html += "#clearBtn  { padding: 5px 12px; font-size: 12px; cursor: pointer; }";
+  html += "</style></head><body>";
+
+  // Power
   html += "<div class='command-group'><h3>Power</h3>";
   html += "<button onclick=\"sendCmd('C0 2E')\">Power On</button>";
   html += "<button onclick=\"sendCmd('C0 2F')\">Power Off</button>";
   html += "</div>";
 
-  // Volume Commands
+  // Volume buttons + slider
   html += "<div class='command-group'><h3>Volume</h3>";
   html += "<button onclick=\"sendCmd('C0 14')\">Vol +</button>";
   html += "<button onclick=\"sendCmd('C0 15')\">Vol -</button>";
@@ -85,57 +91,103 @@ void handleRoot() {
   html += "<button onclick=\"sendCmd('C0 07')\">Unmute</button>";
   html += "</div>";
 
-  // Source Selection
+  // Source
   html += "<div class='command-group'><h3>Source</h3>";
   html += "<button onclick=\"sendCmd('C0 50 00')\">Tuner</button>";
   html += "<button onclick=\"sendCmd('C0 50 02')\">CD</button>";
   html += "<button onclick=\"sendCmd('C0 50 04')\">MD</button>";
   html += "<button onclick=\"sendCmd('C0 50 05')\">Tape</button>";
-  // html += "<button onclick=\"sendCmd('C0 50 10')\">Video 1</button>";
-  // html += "<button onclick=\"sendCmd('C0 50 11')\">Video 2</button>";
-  // html += "<button onclick=\"sendCmd('C0 50 19')\">DVD</button>";
+  html += "<button onclick=\"sendCmd('C0 50 10')\">Video 1</button>";
+  html += "<button onclick=\"sendCmd('C0 50 11')\">Video 2</button>";
+  html += "<button onclick=\"sendCmd('C0 50 19')\">DVD</button>";
   html += "</div>";
 
-  // Status Queries
+  // Status
   html += "<div class='command-group'><h3>Query Status</h3>";
   html += "<button onclick=\"sendCmd('C0 0F')\">Source Status</button>";
   html += "<button onclick=\"sendCmd('C0 6A')\">Device Name</button>";
   html += "</div>";
 
-  // Response Area
+  // Response box
   html += "<h3>Response:</h3>";
   html += "<div id='responseBox'>Waiting for command...</div>";
 
+  // Scrolling log
+  html += "<div id='logContainer'>";
+  html += "<div id='logHeader'><h3 style='margin:0'>Log</h3><button id='clearBtn' onclick='clearLog()'>Clear</button></div>";
+  html += "<div id='logBox'><span class='log-placeholder' style='color:#aaa'>No activity yet.</span></div>";
+  html += "</div>";
+
+  // --- JavaScript ---
   html += "<script>";
-  html += "function sendCmd(cmd) {";
+
+  // sendDirectVolume function (fixed: now properly concatenated)
+  html += "function sendDirectVolume(val){";
+  html += "  var hexVal = parseInt(val).toString(16).toUpperCase();";
+  html += "  if(hexVal.length < 2) hexVal = '0' + hexVal;";
+  html += "  sendCmd('C0 40 ' + hexVal);";
+  html += "}";
+
+  // Timestamp helper
+  html += "function ts(){";
+  html += "  var d = new Date();";
+  html += "  return d.toTimeString().slice(0,8);";
+  html += "}";
+
+  // Append a line to the log and auto-scroll
+  html += "function appendLog(cls,text){";
+  html += "  var box = document.getElementById('logBox');";
+  html += "  if(box.querySelector('.log-placeholder')){box.innerHTML=''}";
+  html += "  var d = document.createElement('div');";
+  html += "  d.className = 'log-entry';";
+  html += "  d.innerHTML = '<span class=\"log-time\">' + ts() + '</span><span class=\"' + cls + '\">' + text + '</span>';";
+  html += "  box.appendChild(d);";
+  html += "  box.scrollTop = box.scrollHeight;";
+  html += "}";
+
+  // Clear the log
+  html += "function clearLog(){";
+  html += "  document.getElementById('logBox').innerHTML = '<span class=\"log-placeholder\" style=\"color:#aaa\">Log cleared.</span>'";
+  html += "}";
+
+  // Send command
+  html += "function sendCmd(cmd){";
   html += "  var xhr = new XMLHttpRequest();";
-  html += "  xhr.open('GET', '/send?cmd=' + cmd.replace(/ /g, ''), true);";
-  html += "  xhr.onload = function() {";
-  html += "    if (xhr.status == 200) {";
-  html += "      fetchMessage();";
-  html += "    }";
-  html += "  };";
+  html += "  xhr.open('GET','/send?cmd=' + cmd.replace(/ /g,''),true);";
+  html += "  xhr.onload = function(){ if(xhr.status==200){ fetchMessage(); } };";
   html += "  xhr.send();";
   html += "  document.getElementById('responseBox').innerHTML = 'Command sent: ' + cmd + '. Waiting for reply...';";
+  html += "  appendLog('log-cmd','\\u2192 TX: ' + cmd);";  // → TX:
   html += "}";
-  html += "function fetchMessage() {";
+
+  // Fetch latest reply from /message
+  html += "function fetchMessage(){";
   html += "  var xhr = new XMLHttpRequest();";
-  html += "  xhr.open('GET', '/message', true);";
-  html += "  xhr.onload = function() {";
-  html += "    if (xhr.status == 200) {";
-  html += "      document.getElementById('responseBox').innerHTML = xhr.responseText;";
+  html += "  xhr.open('GET','/message',true);";
+  html += "  xhr.onload = function(){";
+  html += "    if(xhr.status==200){";
+  html += "      var msg = xhr.responseText;";
+  html += "      document.getElementById('responseBox').innerHTML = msg;";
+  html += "      if(msg.indexOf('No new response') === -1){";
+  html += "        appendLog('log-reply','\\u2190 RX: ' + msg);";  // ← RX:
+  html += "      }";
   html += "    }";
   html += "  };";
   html += "  xhr.send();";
   html += "}";
-  html += "setInterval(fetchMessage, 1000);";
+
+  // Poll for unsolicited replies every second
+  html += "setInterval(fetchMessage,1000);";
+
   html += "</script>";
   html += "</body></html>";
 
   server.send(200, "text/html", html);
 }
 
-// --- Command Handling from Web ---
+// ---------------------------------------------------------------------------
+// Command handler
+// ---------------------------------------------------------------------------
 void handleSendCommand() {
   if (!server.hasArg("cmd")) {
     server.send(400, "text/plain", "Missing command");
@@ -145,7 +197,7 @@ void handleSendCommand() {
   String hexString = server.arg("cmd");
   hexString.toUpperCase();
 
-  Serial.print("Web request - raw command: "); // Debug
+  Serial.print("Web request - raw command: ");
   Serial.println(hexString);
 
   if (hexString.length() % 2 != 0) {
@@ -156,7 +208,7 @@ void handleSendCommand() {
 
   int length = hexString.length() / 2;
   byte commandBytes[length];
-  
+
   for (int i = 0; i < length; i++) {
     String hexByte = hexString.substring(i * 2, i * 2 + 2);
     if (!isHexadecimalDigit(hexByte[0]) || !isHexadecimalDigit(hexByte[1])) {
@@ -167,7 +219,6 @@ void handleSendCommand() {
     commandBytes[i] = strtol(hexByte.c_str(), NULL, 16);
   }
 
-  // Print the bytes about to be sent
   Serial.print("Sending S-Link command: ");
   for (int i = 0; i < length; i++) {
     if (commandBytes[i] < 0x10) Serial.print("0");
@@ -176,17 +227,17 @@ void handleSendCommand() {
   }
   Serial.println();
 
-  // Send the command over S-Link bus
   sendCommand(commandBytes, length);
-  
   server.send(200, "text/plain", "Command sent");
 }
 
-// --- Provide Latest Message to Web Page ---
+// ---------------------------------------------------------------------------
+// Message endpoint
+// ---------------------------------------------------------------------------
 void handleGetMessage() {
   if (newMessageAvailable) {
     server.send(200, "text/plain", lastReceivedMessage);
-    Serial.print("Web client fetched reply: ");  // Debug
+    Serial.print("Web client fetched reply: ");
     Serial.println(lastReceivedMessage);
     newMessageAvailable = false;
   } else {
@@ -194,24 +245,22 @@ void handleGetMessage() {
   }
 }
 
-// --- S-Link Bus Handling (with added serial debugging) ---
+// ---------------------------------------------------------------------------
+// S-Link bus input (ISR + processing)
+// ---------------------------------------------------------------------------
 IRAM_ATTR void busChange()
 {
   unsigned long timeNow = micros();
-
   int busState = digitalRead(INPUT_PIN);
   if (busState == LOW) {
     timeLowTransition = timeNow;
     return;
   }
-
   int timeLow = timeNow - timeLowTransition;
-
   if ((bufferWritePosition + 1) % PULSE_BUFFER_SIZE == bufferReadPosition) {
     bufferOverflowDetected = true;
     return;
   }
-
   pulseBuffer[bufferWritePosition] = min(255, timeLow / 10);
   bufferWritePosition = (bufferWritePosition + 1) % PULSE_BUFFER_SIZE;
 }
@@ -222,7 +271,7 @@ void processSlinkInput()
   static byte currentBit = 0;
   static String bytesReceivedHex;
 
-  bool completeMessageReceived = false;  
+  bool completeMessageReceived = false;
   while (bufferReadPosition != bufferWritePosition) {
     int timeLow = pulseBuffer[bufferReadPosition] * 10;
     bufferReadPosition = (bufferReadPosition + 1) % PULSE_BUFFER_SIZE;
@@ -255,8 +304,6 @@ void processSlinkInput()
     if (!bytesReceivedHex.isEmpty()) {
       lastReceivedMessage = bytesReceivedHex;
       newMessageAvailable = true;
-
-      // Debug output to Serial
       Serial.print("S-Link reply: ");
       Serial.println(bytesReceivedHex);
     }
@@ -272,7 +319,6 @@ void processSlinkInput()
       Serial.println(" stray bits received");
     }
 
-    // Reset for next message
     bytesReceivedHex = String();
     currentByte = 0;
     currentBit = 0;
@@ -282,12 +328,14 @@ void processSlinkInput()
 bool isBusIdle()
 {
   noInterrupts();
-  bool isBusIdle = micros() - timeLowTransition > 1200 + 600 + 20000;
+  bool idle = micros() - timeLowTransition > 1200 + 600 + 20000;
   interrupts();
-  return isBusIdle;
+  return idle;
 }
 
-// --- S-Link Sending Functions (unchanged) ---
+// ---------------------------------------------------------------------------
+// S-Link sending
+// ---------------------------------------------------------------------------
 void sendPulseDelimiter()
 {
   digitalWrite(OUTPUT_PIN, LOW);
@@ -297,18 +345,14 @@ void sendPulseDelimiter()
 void sendSyncPulse()
 {
   digitalWrite(OUTPUT_PIN, HIGH);
-  delayMicroseconds(2400);  
+  delayMicroseconds(2400);
   sendPulseDelimiter();
 }
 
 void sendBit(int bit)
 {
   digitalWrite(OUTPUT_PIN, HIGH);
-  if (bit) {
-    delayMicroseconds(1200);
-  } else {
-    delayMicroseconds(600);
-  }
+  delayMicroseconds(bit ? 1200 : 600);
   sendPulseDelimiter();
 }
 
@@ -339,7 +383,9 @@ void sendCommand(byte command[], int commandLength)
   idleAfterCommand();
 }
 
-// --- Main Loop ---
+// ---------------------------------------------------------------------------
+// Main loop
+// ---------------------------------------------------------------------------
 void loop()
 {
   if (wifiMulti.run() == WL_CONNECTED) {

@@ -21,6 +21,22 @@ String lastReceivedMessage = "";
 bool newMessageAvailable = false;
 bool bufferOverflowDetected = false;
 
+// Forward declarations
+String decodeSlinkMessage(byte bytes[], byte len);
+String getSourceName(byte code);
+void handleRoot();
+void handleSendCommand();
+void handleGetMessage();
+void busChange();
+void processSlinkInput();
+bool isBusIdle();
+void sendPulseDelimiter();
+void sendSyncPulse();
+void sendBit(int bit);
+void sendByte(int value);
+void idleAfterCommand();
+void sendCommand(byte command[], int commandLength);
+
 void setup()
 {
   Serial.begin(115200);
@@ -120,8 +136,6 @@ void handleRoot() {
   html += "<div class='command-group'><h3>Query Status</h3>";
   html += "<button onclick=\"sendCmd('C0 0F')\">Source Status</button>";
   html += "<button onclick=\"sendCmd('C0 6A')\">Device Name</button>";
-  html += "<button onclick=\"sendCmd('C0 43')\">Input Type</button>";
-  html += "<button onclick=\"sendCmd('C0 48')\">Source Name</button>";
   html += "</div>";
 
   // Response box
@@ -137,20 +151,17 @@ void handleRoot() {
   // --- JavaScript ---
   html += "<script>";
 
-  // sendDirectVolume function (fixed: now properly concatenated)
   html += "function sendDirectVolume(val){";
   html += "  var hexVal = parseInt(val).toString(16).toUpperCase();";
   html += "  if(hexVal.length < 2) hexVal = '0' + hexVal;";
   html += "  sendCmd('C0 40 ' + hexVal);";
   html += "}";
 
-  // Timestamp helper
   html += "function ts(){";
   html += "  var d = new Date();";
   html += "  return d.toTimeString().slice(0,8);";
   html += "}";
 
-  // Append a line to the log and auto-scroll
   html += "function appendLog(cls,text){";
   html += "  var box = document.getElementById('logBox');";
   html += "  if(box.querySelector('.log-placeholder')){box.innerHTML=''}";
@@ -161,22 +172,19 @@ void handleRoot() {
   html += "  box.scrollTop = box.scrollHeight;";
   html += "}";
 
-  // Clear the log
   html += "function clearLog(){";
   html += "  document.getElementById('logBox').innerHTML = '<span class=\"log-placeholder\" style=\"color:#aaa\">Log cleared.</span>'";
   html += "}";
 
-  // Send command
   html += "function sendCmd(cmd){";
   html += "  var xhr = new XMLHttpRequest();";
   html += "  xhr.open('GET','/send?cmd=' + cmd.replace(/ /g,''),true);";
   html += "  xhr.onload = function(){ if(xhr.status==200){ fetchMessage(); } };";
   html += "  xhr.send();";
   html += "  document.getElementById('responseBox').innerHTML = 'Command sent: ' + cmd + '. Waiting for reply...';";
-  html += "  appendLog('log-cmd','\\u2192 TX: ' + cmd);";  // → TX:
+  html += "  appendLog('log-cmd','\\u2192 TX: ' + cmd);";
   html += "}";
 
-  // Fetch latest reply from /message
   html += "function fetchMessage(){";
   html += "  var xhr = new XMLHttpRequest();";
   html += "  xhr.open('GET','/message',true);";
@@ -185,14 +193,13 @@ void handleRoot() {
   html += "      var msg = xhr.responseText;";
   html += "      document.getElementById('responseBox').innerHTML = msg;";
   html += "      if(msg.indexOf('No new response') === -1){";
-  html += "        appendLog('log-reply','\\u2190 RX: ' + msg);";  // ← RX:
+  html += "        appendLog('log-reply','\\u2190 RX: ' + msg);";
   html += "      }";
   html += "    }";
   html += "  };";
   html += "  xhr.send();";
   html += "}";
 
-  // Poll for unsolicited replies every second
   html += "setInterval(fetchMessage,1000);";
 
   html += "</script>";
@@ -285,7 +292,8 @@ void processSlinkInput()
 {
   static byte currentByte = 0;
   static byte currentBit = 0;
-  static String bytesReceivedHex;
+  static byte msgBytes[32]; // Temporary buffer array to hold parsed bytes
+  static byte msgLen = 0;   // Track length of the active incoming packet
 
   bool completeMessageReceived = false;
   while (bufferReadPosition != bufferWritePosition) {
@@ -305,33 +313,22 @@ void processSlinkInput()
     }
 
     if (currentBit == 8) {
-      if (currentByte <= 0xF) {
-        bytesReceivedHex += "0" + String(currentByte, HEX);
-      } else {
-        bytesReceivedHex += String(currentByte, HEX);
+      if (msgLen < sizeof(msgBytes)) {
+        msgBytes[msgLen++] = currentByte;
       }
-      bytesReceivedHex += " ";
       currentBit = 0;
     }
   }
 
   completeMessageReceived |= isBusIdle();
-    if (completeMessageReceived && (!bytesReceivedHex.isEmpty() || currentBit != 0)) {
-      if (!bytesReceivedHex.isEmpty()) {
-        
-        // -- NEW DECODING LOGIC --
-        String decodedMsg = decodeSlinkMessage(bytesReceivedHex);
-        
-        // Combine raw hex and decoded text for the Web UI
-        lastReceivedMessage = bytesReceivedHex + " [" + decodedMsg + "]";
-        newMessageAvailable = true;
-        
-        // Print cleanly to the serial monitor
-        Serial.print("S-Link reply: ");
-        Serial.print(bytesReceivedHex);
-        Serial.print(" -> ");
-        Serial.println(decodedMsg);
-      }
+  if (completeMessageReceived && (msgLen > 0 || currentBit != 0)) {
+    if (msgLen > 0) {
+      // Decode the raw byte array into human-readable definitions
+      lastReceivedMessage = decodeSlinkMessage(msgBytes, msgLen);
+      newMessageAvailable = true;
+      Serial.print("S-Link processed frame: ");
+      Serial.println(lastReceivedMessage);
+    }
 
     if (bufferOverflowDetected) {
       Serial.println("WARNING: Pulse buffer overflow detected!");
@@ -344,9 +341,10 @@ void processSlinkInput()
       Serial.println(" stray bits received");
     }
 
-    bytesReceivedHex = String();
+    // Reset markers for next frame
     currentByte = 0;
     currentBit = 0;
+    msgLen = 0;
   }
 }
 
@@ -356,6 +354,109 @@ bool isBusIdle()
   bool idle = micros() - timeLowTransition > 1200 + 600 + 20000;
   interrupts();
   return idle;
+}
+
+// ---------------------------------------------------------------------------
+// S-Link Decoder Core Implementation
+// ---------------------------------------------------------------------------
+String getSourceName(byte code) {
+  switch (code) {
+    case 0x00: return "Tuner";
+    case 0x02: return "CD";
+    case 0x04: return "MD";
+    case 0x05: return "Tape";
+    case 0x10: return "Video 1";
+    case 0x11: return "Video 2";
+    case 0x19: return "DVD";
+    default:   return "Unknown (0x" + String(code, HEX) + ")";
+  }
+}
+
+String decodeSlinkMessage(byte bytes[], byte len) {
+  // Construct raw Hex string representation first for easy comparison
+  String output = "";
+  for (byte i = 0; i < len; i++) {
+    if (bytes[i] < 0x10) output += "0";
+    output += String(bytes[i], HEX) + " ";
+  }
+  output.toUpperCase();
+  output += "-> ";
+
+  byte idx = 0;
+  
+  // Rule 1: Check for Receiver Source Prefix (C8)
+  if (bytes[0] == 0xC8 || bytes[0] == 0xCB) {
+    output += "[Receiver] ";
+    idx = 1; // Advance the pointer past the device prefix
+  }
+
+  // Handle a lone C8 query/ping frame safely
+  if (idx >= len) {
+    output += "Device ID Handshake / Ping";
+    return output;
+  }
+
+  byte cmd = bytes[idx];
+
+  // Rule 2: Device Name (6A XXXXX...)
+  if (cmd == 0x6A) {
+    output += "Device Name: ";
+    for (byte i = idx + 1; i < len; i++) {
+      if (bytes[i] >= 32 && bytes[i] <= 126) { // Filter printable ASCII
+        output += (char)bytes[i];
+      } else {
+        output += ".";
+      }
+    }
+  }
+  // Rule 3: Input Hardware Status Type (43 TT XX)
+  else if (cmd == 0x43 && (len - idx) >= 3) {
+    byte tt = bytes[idx + 1];
+    output += "Input Connection: ";
+    if (tt == 0x01)      output += "Optical";
+    else if (tt == 0x02) output += "Coax";
+    else if (tt == 0x04) output += "Analog";
+    else                 output += "Unknown Type (" + String(tt, HEX) + ")";
+  }
+  // Rule 4: Dedicated Power Sequence status block Match
+  else if (cmd == 0x61 && (len - idx) >= 7 &&
+           bytes[idx+1] == 0xC3 && bytes[idx+2] == 0x87 &&
+           bytes[idx+3] == 0x0F && bytes[idx+4] == 0x1F &&
+           bytes[idx+5] == 0x3F && bytes[idx+6] == 0x7F) {
+    output += "Power Status: ON Sequence";
+  }
+  // Rule 5: Standard Source Status Matrix (70 AA AV CC)
+  else if (cmd == 0x70 && (len - idx) >= 4) {
+    byte aa = bytes[idx + 1];
+    byte av = bytes[idx + 2];
+    byte cc = bytes[idx + 3];
+
+    output += "Status -> Audio: " + getSourceName(aa);
+    output += " | Video: " + getSourceName(av);
+
+    // Decode explicit condition flag bits out of byte CC
+    // Assuming standard 0-indexed bits: Bit 4 (0x10), Bit 3 (0x08), Bit 1 (0x02)
+    output += " | Flags: [";
+    bool subFlag = false;
+    if (cc & 0x10) { output += "5.1 Input"; subFlag = true; }
+    if (cc & 0x08) { if (subFlag) output += ", "; output += "Tape Loop"; subFlag = true; }
+    if (cc & 0x02) { if (subFlag) output += ", "; output += "Muted"; }
+    output += "]";
+  }
+  // Rule 6: Secondary Zone Status Matrix (71 AA XX XX...)
+  else if (cmd == 0x71 && (len - idx) >= 2) {
+    byte aa = bytes[idx + 1];
+    output += "2nd Audio Zone Status -> Source: " + getSourceName(aa);
+  }
+  else if (cmd == 0x0E){
+    output += "Error";
+  }
+  // Fallback for unmapped control frames
+  else {
+    output += "Unmapped S-Link Frame";
+  }
+
+  return output;
 }
 
 // ---------------------------------------------------------------------------
@@ -406,125 +507,6 @@ void sendCommand(byte command[], int commandLength)
   }
   interrupts();
   idleAfterCommand();
-}
-
-// ---------------------------------------------------------------------------
-// S-Link Message Decoder
-// ---------------------------------------------------------------------------
-
-// Splits 's' by 'delimiter' and stores up to 'maxTokens' parts into 'result'.
-// Returns the number of tokens actually found.
-int splitString(const String &s, char delimiter, String result[], int maxTokens) {
-  int count = 0;
-  int start = 0;
-  int end = s.indexOf(delimiter);
-  
-  while (end != -1 && count < maxTokens) {
-    result[count++] = s.substring(start, end);
-    start = end + 1;
-    end = s.indexOf(delimiter, start);
-  }
-  // Add the last token (or the only one if no delimiter was found)
-  if (count < maxTokens && start < s.length()) {
-    result[count++] = s.substring(start);
-  }
-  Serial.print("this how many times its split:");
-  Serial.println(count);
-
-  return count;
-}
-
-String decodeSlinkMessage(String rawHex) {
-  rawHex.trim();                     // remove leading/trailing whitespace
-  rawHex.replace("\r", "");          // in case of serial line endings
-  rawHex.replace("\n", "");
-
-  // Split into at most 10 tokens
-  String tokens[10];
-  int tokenCount = splitString(rawHex, ' ', tokens, 10);
-
-  // We need at least two parts: device + command
-  if (tokenCount < 2) {
-    return "Unknown or Incomplete";
-  }
-
-  switch count{
-    case 3{
-
-    }
-
-  }
-
-
-  String deviceId = tokens[0];
-  String cmdId    = tokens[1];
-  String paramId  = tokens[2];
-  String extraId  = tokens[3];
-
-  // If there is a third token, use it. If there are even more, you can either:
-  // - use only tokens[2] (the original behavior)
-  // - join all remaining tokens with a space to preserve multi‑part parameters
-  if (tokenCount >= 3) {
-    // Option A: just the third token (original style)
-    // paramId = tokens[2];
-
-    // Option B: combine everything after the command (I'll do this)
-    paramId = tokens[2];
-    for (int i = 3; i < tokenCount; i++) {
-      paramId += " " + tokens[i];
-    }
-  }
-
-
-  // --- Decoding blocks ---
-  if (deviceId == "c8") {
-    String dev = "Amp";
-
-    if (cmdId == "2e") return dev + ": Power On";
-    if (cmdId == "2f") return dev + ": Power Off";
-
-    if (cmdId == "14") return dev + ": Vol +";
-    if (cmdId == "15") return dev + ": Vol -";
-    if (cmdId == "06") return dev + ": Mute On";
-    if (cmdId == "07") return dev + ": Mute Off";
-    if (cmdId == "40") return dev + ": Set Vol (0x" + paramId + ")";
-
-    if (cmdId == "50") {
-      if (paramId == "00") return dev + ": Input -> Tuner";
-      if (paramId == "02") return dev + ": Input -> CD";
-      if (paramId == "04") return dev + ": Input -> MD";
-      if (paramId == "05") return dev + ": Input -> Tape";
-      if (paramId == "10") return dev + ": Input -> Video 1";
-      if (paramId == "11") return dev + ": Input -> Video 2";
-      if (paramId == "19") return dev + ": Input -> DVD";
-      return dev + ": Input Set (0x" + paramId + ")";
-    }
-
-    if (cmdId == "43") {
-      if (paramId == "01") return dev + ": Audio -> Optical";
-      if (paramId == "02") return dev + ": Audio -> Coax";
-      if (paramId == "04") return dev + ": Audio -> Analog";
-      // ★ Catch‑all for unknown Audio parameters (fixes the raw fall‑through)
-      return dev + ": Audio Mode (0x" + paramId + ")";
-    }
-
-    if (cmdId == "0f") return dev + ": Status Response (" + paramId + ")";
-    if (cmdId == "6a") return dev + ": Device Name (" + paramId + ")";
-
-    // ★ Default for any other command from device c8
-    return dev + ": Unknown Command (cmd=0x" + cmdId + " param=0x" + paramId + ")";
-  }
-
-  else if (deviceId == "b0") {   // lowercase because we lowered everything
-    if (cmdId == "00") return "CD: Play";
-    if (cmdId == "01") return "CD: Stop";
-    if (cmdId == "02") return "CD: Pause";
-    // ★ Catch‑all for other CD commands
-    return "CD: Unknown Command (cmd=0x" + cmdId + " param=0x" + paramId + ")";
-  }
-
-  // If deviceId is not recognized at all
-  return "Raw: " + rawHex;
 }
 
 // ---------------------------------------------------------------------------

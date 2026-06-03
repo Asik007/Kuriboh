@@ -314,13 +314,22 @@ void processSlinkInput()
   }
 
   completeMessageReceived |= isBusIdle();
-  if (completeMessageReceived && (!bytesReceivedHex.isEmpty() || currentBit != 0)) {
-    if (!bytesReceivedHex.isEmpty()) {
-      lastReceivedMessage = bytesReceivedHex;
-      newMessageAvailable = true;
-      Serial.print("S-Link reply: ");
-      Serial.println(bytesReceivedHex);
-    }
+    if (completeMessageReceived && (!bytesReceivedHex.isEmpty() || currentBit != 0)) {
+      if (!bytesReceivedHex.isEmpty()) {
+        
+        // -- NEW DECODING LOGIC --
+        String decodedMsg = decodeSlinkMessage(bytesReceivedHex);
+        
+        // Combine raw hex and decoded text for the Web UI
+        lastReceivedMessage = bytesReceivedHex + " [" + decodedMsg + "]";
+        newMessageAvailable = true;
+        
+        // Print cleanly to the serial monitor
+        Serial.print("S-Link reply: ");
+        Serial.print(bytesReceivedHex);
+        Serial.print(" -> ");
+        Serial.println(decodedMsg);
+      }
 
     if (bufferOverflowDetected) {
       Serial.println("WARNING: Pulse buffer overflow detected!");
@@ -396,6 +405,82 @@ void sendCommand(byte command[], int commandLength)
   interrupts();
   idleAfterCommand();
 }
+
+// ---------------------------------------------------------------------------
+// S-Link Message Decoder
+// ---------------------------------------------------------------------------
+String decodeSlinkMessage(String rawHex) {
+  // Remove any trailing spaces from the buffer builder
+  rawHex.trim();
+
+  // Split the string into Device, Command, and Parameters
+  int firstSpace = rawHex.indexOf(' ');
+  if (firstSpace == -1) return "Unknown or Incomplete";
+
+  String deviceId = rawHex.substring(0, firstSpace);
+  
+  int secondSpace = rawHex.indexOf(' ', firstSpace + 1);
+  String cmdId;
+  String paramId = "";
+
+  // Check if there are parameters after the command
+  if (secondSpace == -1) {
+    cmdId = rawHex.substring(firstSpace + 1);
+  } else {
+    cmdId = rawHex.substring(firstSpace + 1, secondSpace);
+    paramId = rawHex.substring(secondSpace + 1);
+  }
+
+  // --- Decode based on Device ID ---
+  // C0 is the standard Receiver/Amplifier ID
+  if (deviceId == "C0" || deviceId == "C1" || deviceId == "C2") {
+    String dev = (deviceId == "C0") ? "Amp" : "Amp(Sub)";
+
+    // Power
+    if (cmdId == "2E") return dev + ": Power On";
+    if (cmdId == "2F") return dev + ": Power Off";
+    
+    // Volume
+    if (cmdId == "14") return dev + ": Vol +";
+    if (cmdId == "15") return dev + ": Vol -";
+    if (cmdId == "06") return dev + ": Mute On";
+    if (cmdId == "07") return dev + ": Mute Off";
+    if (cmdId == "40") return dev + ": Set Vol (0x" + paramId + ")";
+
+    // Inputs
+    if (cmdId == "50") {
+      if (paramId == "00") return dev + ": Input -> Tuner";
+      if (paramId == "02") return dev + ": Input -> CD";
+      if (paramId == "04") return dev + ": Input -> MD";
+      if (paramId == "05") return dev + ": Input -> Tape";
+      if (paramId == "10") return dev + ": Input -> Video 1";
+      if (paramId == "11") return dev + ": Input -> Video 2";
+      if (paramId == "19") return dev + ": Input -> DVD";
+      return dev + ": Input Set (0x" + paramId + ")";
+    }
+
+    // Audio Modes
+    if (cmdId == "83") {
+      if (paramId == "01") return dev + ": Audio -> Optical";
+      if (paramId == "02") return dev + ": Audio -> Coax";
+      if (paramId == "04") return dev + ": Audio -> Analog";
+    }
+
+    // Status Queries
+    if (cmdId == "0F") return dev + ": Status Response (" + paramId + ")";
+    if (cmdId == "6A") return dev + ": Device Name (" + paramId + ")";
+  }
+  
+  // B0 is typically CD Player, you can expand this section using the Boehmel link
+  else if (deviceId == "B0") {
+    if (cmdId == "00") return "CD: Play";
+    if (cmdId == "01") return "CD: Stop";
+    if (cmdId == "02") return "CD: Pause";
+  }
+
+  return "Raw: " + rawHex;
+}
+
 
 // ---------------------------------------------------------------------------
 // Main loop

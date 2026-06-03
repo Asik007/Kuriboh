@@ -120,6 +120,8 @@ void handleRoot() {
   html += "<div class='command-group'><h3>Query Status</h3>";
   html += "<button onclick=\"sendCmd('C0 0F')\">Source Status</button>";
   html += "<button onclick=\"sendCmd('C0 6A')\">Device Name</button>";
+  html += "<button onclick=\"sendCmd('C0 43')\">Input Type</button>";
+  html += "<button onclick=\"sendCmd('C0 48')\">Source Name</button>";
   html += "</div>";
 
   // Response box
@@ -409,45 +411,84 @@ void sendCommand(byte command[], int commandLength)
 // ---------------------------------------------------------------------------
 // S-Link Message Decoder
 // ---------------------------------------------------------------------------
-String decodeSlinkMessage(String rawHex) {
-  // Remove any trailing spaces from the buffer builder
-  rawHex.trim();
 
-  // Split the string into Device, Command, and Parameters
-  int firstSpace = rawHex.indexOf(' ');
-  if (firstSpace == -1) return "Unknown or Incomplete";
-
-  String deviceId = rawHex.substring(0, firstSpace);
+// Splits 's' by 'delimiter' and stores up to 'maxTokens' parts into 'result'.
+// Returns the number of tokens actually found.
+int splitString(const String &s, char delimiter, String result[], int maxTokens) {
+  int count = 0;
+  int start = 0;
+  int end = s.indexOf(delimiter);
   
-  int secondSpace = rawHex.indexOf(' ', firstSpace + 1);
-  String cmdId;
-  String paramId = "";
+  while (end != -1 && count < maxTokens) {
+    result[count++] = s.substring(start, end);
+    start = end + 1;
+    end = s.indexOf(delimiter, start);
+  }
+  // Add the last token (or the only one if no delimiter was found)
+  if (count < maxTokens && start < s.length()) {
+    result[count++] = s.substring(start);
+  }
+  Serial.print("this how many times its split:");
+  Serial.println(count);
 
-  // Check if there are parameters after the command
-  if (secondSpace == -1) {
-    cmdId = rawHex.substring(firstSpace + 1);
-  } else {
-    cmdId = rawHex.substring(firstSpace + 1, secondSpace);
-    paramId = rawHex.substring(secondSpace + 1);
+  return count;
+}
+
+String decodeSlinkMessage(String rawHex) {
+  rawHex.trim();                     // remove leading/trailing whitespace
+  rawHex.replace("\r", "");          // in case of serial line endings
+  rawHex.replace("\n", "");
+
+  // Split into at most 10 tokens
+  String tokens[10];
+  int tokenCount = splitString(rawHex, ' ', tokens, 10);
+
+  // We need at least two parts: device + command
+  if (tokenCount < 2) {
+    return "Unknown or Incomplete";
   }
 
-  // --- Decode based on Device ID ---
-  // C0 is the standard Receiver/Amplifier ID
-  if (deviceId == "C0" || deviceId == "C1" || deviceId == "C2") {
-    String dev = (deviceId == "C0") ? "Amp" : "Amp(Sub)";
+  switch count{
+    case 3{
 
-    // Power
-    if (cmdId == "2E") return dev + ": Power On";
-    if (cmdId == "2F") return dev + ": Power Off";
-    
-    // Volume
+    }
+
+  }
+
+
+  String deviceId = tokens[0];
+  String cmdId    = tokens[1];
+  String paramId  = tokens[2];
+  String extraId  = tokens[3];
+
+  // If there is a third token, use it. If there are even more, you can either:
+  // - use only tokens[2] (the original behavior)
+  // - join all remaining tokens with a space to preserve multi‑part parameters
+  if (tokenCount >= 3) {
+    // Option A: just the third token (original style)
+    // paramId = tokens[2];
+
+    // Option B: combine everything after the command (I'll do this)
+    paramId = tokens[2];
+    for (int i = 3; i < tokenCount; i++) {
+      paramId += " " + tokens[i];
+    }
+  }
+
+
+  // --- Decoding blocks ---
+  if (deviceId == "c8") {
+    String dev = "Amp";
+
+    if (cmdId == "2e") return dev + ": Power On";
+    if (cmdId == "2f") return dev + ": Power Off";
+
     if (cmdId == "14") return dev + ": Vol +";
     if (cmdId == "15") return dev + ": Vol -";
     if (cmdId == "06") return dev + ": Mute On";
     if (cmdId == "07") return dev + ": Mute Off";
     if (cmdId == "40") return dev + ": Set Vol (0x" + paramId + ")";
 
-    // Inputs
     if (cmdId == "50") {
       if (paramId == "00") return dev + ": Input -> Tuner";
       if (paramId == "02") return dev + ": Input -> CD";
@@ -459,28 +500,32 @@ String decodeSlinkMessage(String rawHex) {
       return dev + ": Input Set (0x" + paramId + ")";
     }
 
-    // Audio Modes
-    if (cmdId == "83") {
+    if (cmdId == "43") {
       if (paramId == "01") return dev + ": Audio -> Optical";
       if (paramId == "02") return dev + ": Audio -> Coax";
       if (paramId == "04") return dev + ": Audio -> Analog";
+      // ★ Catch‑all for unknown Audio parameters (fixes the raw fall‑through)
+      return dev + ": Audio Mode (0x" + paramId + ")";
     }
 
-    // Status Queries
-    if (cmdId == "0F") return dev + ": Status Response (" + paramId + ")";
-    if (cmdId == "6A") return dev + ": Device Name (" + paramId + ")";
+    if (cmdId == "0f") return dev + ": Status Response (" + paramId + ")";
+    if (cmdId == "6a") return dev + ": Device Name (" + paramId + ")";
+
+    // ★ Default for any other command from device c8
+    return dev + ": Unknown Command (cmd=0x" + cmdId + " param=0x" + paramId + ")";
   }
-  
-  // B0 is typically CD Player, you can expand this section using the Boehmel link
-  else if (deviceId == "B0") {
+
+  else if (deviceId == "b0") {   // lowercase because we lowered everything
     if (cmdId == "00") return "CD: Play";
     if (cmdId == "01") return "CD: Stop";
     if (cmdId == "02") return "CD: Pause";
+    // ★ Catch‑all for other CD commands
+    return "CD: Unknown Command (cmd=0x" + cmdId + " param=0x" + paramId + ")";
   }
 
+  // If deviceId is not recognized at all
   return "Raw: " + rawHex;
 }
-
 
 // ---------------------------------------------------------------------------
 // Main loop

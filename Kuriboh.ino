@@ -91,6 +91,13 @@ void handleRoot() {
   html += "<button onclick=\"sendCmd('C0 07')\">Unmute</button>";
   html += "</div>";
 
+  // Audio control
+  html += "<div class='command-group'><h3>Audio</h3>";
+  html += "<button onclick=\"sendCmd('C0 0C')\">5.1 Input On</button>";
+  html += "<button onclick=\"sendCmd('C0 0D')\">5.1 Input Off</button>";
+  html += "<button onclick=\"sendCmd('C0 0E')\">Status Request 2nd Audio</button>";
+  html += "</div>";
+
   // Source
   html += "<div class='command-group'><h3>Source</h3>";
   html += "<button onclick=\"sendCmd('C0 50 00')\">Tuner</button>";
@@ -100,6 +107,13 @@ void handleRoot() {
   html += "<button onclick=\"sendCmd('C0 50 10')\">Video 1</button>";
   html += "<button onclick=\"sendCmd('C0 50 11')\">Video 2</button>";
   html += "<button onclick=\"sendCmd('C0 50 19')\">DVD</button>";
+  html += "</div>";
+
+  // Input selector
+  html += "<div class='command-group'><h3>Inputs</h3>";
+  html += "<button onclick=\"sendCmd('C0 83 01')\">Optical</button>";
+  html += "<button onclick=\"sendCmd('C0 83 02')\">Coax</button>";
+  html += "<button onclick=\"sendCmd('C0 83 04')\">Analog</button>";
   html += "</div>";
 
   // Status

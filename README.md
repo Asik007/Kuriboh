@@ -1,7 +1,7 @@
 # ESP8266 Sony S-Link Web Controller
 
 A self-contained, web‑based remote control for Sony audio devices that use the **S‑LINK / CTRL‑A(II)** protocol – all running on a single ESP8266.  
-Control your amplifier (or other S‑LINK devices) from any browser, send custom hex commands, and see the device’s replies in real time.
+Control your amplifier (or other S‑LINK devices) from any browser, send custom hex commands, and see the device’s replies in real time. (the main branch is all of the commands I can implement while the implment will be a trimmed down version with a better UI I actually use.)
 
 ## Features
 
@@ -83,6 +83,7 @@ All are included with the ESP8266 Arduino core – no extra installation require
 Navigate to `http://<esp-ip>` or in a browser. You’ll see:
 
 - **Power**, **Volume**, **Mute/Unmute** buttons
+- **Audio** buttons for mute, unmute, 5.1 input on/off (this really just switches to the multi), and 2nd audio status request
 - **Source** selection (Tuner, CD, MD, Tape, Video 1/2, DVD)
 - **Query Status** buttons
 - **Custom Command** text field – type any hex string (e.g., `C0 0F`) and click Send

@@ -30,9 +30,27 @@ Control your amplifier (or other S‑LINK devices) from any browser, send custom
 4. Attach the 3.5mm **ground** to the emitter (low side) and connect the ESP ground as well to consolidate the grounds.
 
 
-![Text](./circuit.png)
+![Text](./images/circuit.png)
 
-A small series resistor (e.g., 220 Ω) on the output pin is recommended to limit current when the bus is driven low by another device.
+A small series resistor (e.g., 220 Ω) on the output pin is recommended to limit current.
+
+
+### Device
+
+Front/back photos of the finished unit and closeups of connectors or mounting.
+
+![Device — front view](./images/device_front.jpeg)
+
+![Device — back view](./images/device_back.jpeg)
+
+I used a case from printables and streched it out [here](https://www.printables.com/model/805383-d1-mini-environment-brightness-sensor) is the link. I did scale it by 105% so it is a looser fit.
+
+### Protoboard / Wiring
+
+Clear photos of the protoboard or wiring used while prototyping (top and closeups of key connections).
+
+![Protoboard wiring](./images/protoboard.jpeg)
+
 
 ## What is S‑LINK?
 
@@ -42,6 +60,13 @@ Commands and replies are sent as short pulses – a 2400 µs sync pulse follow
 This project focuses on the **amplifier** (device prefix `C0` / `C8`), but you can easily adapt the buttons or send any code from the full protocol list.
 
 ## Software
+
+
+Screenshots of the web UI showing the main controls and any important dialogs or custom-command flows.
+
+![UI — Home screen](./images/ui_home.png)
+
+![UI — Custom command view](./images/ui_custom.png)
 
 ### Dependencies (Arduino libraries)
 
@@ -64,13 +89,10 @@ All are included with the ESP8266 Arduino core – no extra installation require
    const char* WIFI_SSID   = "Your_Primary_Network";
    const char* WIFI_PASSWORD = "Primary_Password";
 
-   const char* WIFI_SSID2   = "Your_Backup_Network";   // leave empty if not needed
-   const char* WIFI_PASSWORD2 = "Backup_Password";
-
    #endif
    ```
 
-2. (Optional) Change the hostname in the sketch. Default: `"tuner"`.
+2. (Optional) Change the hostname in the sketch. Default: `"kuriboh"`.
 
 3. Upload the sketch to your ESP8266.
 
@@ -124,4 +146,4 @@ See the full command list at [boehmel.de/slink.htm](https://boehmel.de/slink.htm
 
 This project is open‑source under the MIT License, consistent with the original work by robho.  
 See the [LICENSE](LICENSE) file for details.
-```
+
